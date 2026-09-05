@@ -1,0 +1,207 @@
+====================================================
+DÍA 3 - SCRIPTING AVANZADO Y AUR (continuación Módulo 04)
+====================================================
+
+--------------------------------------------------
+0. RECONEXIÓN RÁPIDA
+--------------------------------------------------
+Repaso de comandos de red del día anterior (nmcli device wifi connect,
+nmcli device status, ping) para retomar conexión a internet antes de seguir.
+
+--------------------------------------------------
+1. RETO: SUBIR NIVEL EN sysinfo.sh
+--------------------------------------------------
+Se planteó reescribir el script con lógica real de programación en vez de
+solo líneas sueltas de echo. Requisitos del reto:
+
+1) Funciones para cada sección (memoria, disco, red) en vez de código suelto
+2) Argumentos posicionales: sysinfo, sysinfo mem, sysinfo disk, sysinfo net
+   - Argumento inválido → mensaje de uso/error y salir con código distinto de 0
+3) Condicional real: alerta si el uso de disco raíz supera 80%
+4) Loop: recorrer las interfaces de red activas una por una (no un solo grep)
+
+Investigación sugerida (sin dar la sintaxis exacta): funciones en bash,
+argumentos posicionales ($1, $2...), case statement, comparación numérica
+(-gt, -lt), while read / for con $(comando).
+
+--------------------------------------------------
+2. PRIMER INTENTO - ERROR DE ARGUMENTOS
+--------------------------------------------------
+Primer intento fallido:
+    args=($memory $disk %net $i)
+    case $args in
+
+PROBLEMA DETECTADO: $memory, $disk, $i eran variables INVENTADAS, nunca
+declaradas antes en el script, por lo tanto siempre estaban vacías. Bash no
+sabe que "$memory" debía significar la palabra "memory" - eso es solo un
+nombre que el usuario le puso, sin contenido real asignado.
+
+--------------------------------------------------
+3. CONCEPTO CLAVE: $1 (ARGUMENTOS POSICIONALES)
+--------------------------------------------------
+Cuando se ejecuta:  ./sysinfo.sh net
+Bash separa automáticamente la línea en piezas y las guarda en variables
+especiales YA POBLADAS, sin que el script tenga que declararlas:
+
+    $0  → nombre del script (./sysinfo.sh)
+    $1  → primera palabra después del nombre (net)
+    $2  → segunda palabra, si hubiera
+
+Prueba de concepto usada para verificarlo:
+    #!/bin/bash
+    echo "El valor de \$1 es: $1"
+
+Con esto se corrigió el script:
+    args="$1"
+    case "$args" in
+      memory) ... ;;
+      disk)   ... ;;
+      net)    ... ;;
+      *)      echo "No valido" ;;
+    esac
+
+NOTA: iba a probarse con nombres tipo "1)" o "y)" en el case en vez de
+"memory)"/"disk)"/"net)" - se aclaró que el nombre debe coincidir con la
+PALABRA que realmente se escribe como argumento (ej: si el usuario escribe
+"net", el case debe tener literal "net)", no un número o letra suelta que
+no tenga relación con lo escrito).
+
+--------------------------------------------------
+4. SCRIPT FINAL LOGRADO (resumen de lo que incluye)
+--------------------------------------------------
+- Shebang #!/bin/bash
+- args="$1" y case "$args" in ... esac con las opciones: memory, disk, net,
+  una opción para mostrar todo, y un *) por defecto para argumento inválido
+- Sección memoria: free -h
+- Sección disco:
+    porcentaje=$(df -h / | awk 'NR==2 {gsub("%","",$5); print $5}')
+    if [ "$porcentaje" -gt 80 ]; then advertencia; else mensaje normal; fi
+- Sección red (la más elaborada, con extras no pedidos originalmente):
+    - Colores ANSI en variables (VERDE, ROJO, CYAN, RESET) reusados con
+      echo -e "${VARIABLE}texto${RESET}"
+    - Loop: ip -o -4 addr show | while read -r num interfaz familia direccion resto
+      → reparte cada línea de salida en variables individuales
+    - Salta la interfaz "lo" (loopback) con continue
+    - Extrae la IP limpia con: ip="${direccion%%/*}"
+    - Usa "iw dev $interfaz link" para detectar si está conectado, SSID,
+      señal, velocidad de subida/bajada (rx/tx bitrate) vía awk
+    - Sección extra de "redes conocidas" leyendo un archivo $HISTORIAL línea
+      por línea (PENDIENTE: esa variable no llegó a declararse/definirse en
+      ningún lado, así que esa parte no funciona todavía - queda para
+      revisar en otra sesión)
+
+--------------------------------------------------
+5. AJUSTE DE ORGANIZACIÓN DE ARCHIVOS
+--------------------------------------------------
+El script mejorado se había estado probando en una carpeta distinta a
+~/scripts (una carpeta de un curso de bash en video, con VS Code). Se
+resolvió sobrescribiendo el archivo original en ~/scripts/sysinfo.sh con
+el contenido nuevo, para que el alias "sysinfo" (ya configurado en el PATH
+desde el día anterior) siga funcionando sin tener que tocar el .bashrc de
+nuevo.
+
+--------------------------------------------------
+6. EVALUACIÓN DEL SCRIPT (8/10)
+--------------------------------------------------
+Puntos a favor:
+- Reto completo resuelto: argumentos posicionales, case, condicional
+  numérica, loop con while read
+- Iniciativa extra no pedida: colores ANSI, detección de SSID/señal con iw,
+  diseño visual con símbolos (🟢🔴)
+- Buen manejo de casos borde (saltar "lo" con continue)
+
+Puntos a mejorar (razón de no ser 10/10):
+1) CÓDIGO DUPLICADO: la opción "mostrar todo" (caso "y)" en el intento
+   original) copiaba literalmente el código de memoria+disco+red en vez de
+   reutilizar las mismas funciones. Esto es exactamente el problema que
+   resuelven las FUNCIONES: declarar mostrar_memoria(), mostrar_disco(),
+   mostrar_red() una sola vez, y que tanto la opción individual como la
+   opción "todo" simplemente LLAMEN a esas funciones.
+   → PENDIENTE: refactorizar usando funciones reales (reto abierto para
+     la próxima sesión)
+2) $HISTORIAL nunca se definió en ningún lado del script → esa sección
+   siempre cae en el "else" (No hay redes registradas)
+3) Detalles menores de sintaxis: "echo""" sin espacio (funciona por
+   casualidad en bash, pero es mala práctica) - debería ser echo ""
+
+--------------------------------------------------
+7. PENDIENTE SIN TERMINAR: GIT COMMIT DEL SCRIPT ACTUALIZADO
+--------------------------------------------------
+Quedó pendiente subir la versión final de sysinfo.sh al repositorio de
+dotfiles. Pasos que faltan (mismo flujo usado el día anterior con .bashrc,
+pero repasar bien porque no quedó claro del todo):
+
+1) Copiar el script actualizado DESDE ~/scripts/sysinfo.sh HACIA DENTRO de
+   ~/dotfiles (git solo seguirá archivos que estén físicamente dentro de
+   la carpeta del repo)
+       cp ~/scripts/sysinfo.sh ~/dotfiles/
+2) Pararse en la carpeta del repo:
+       cd ~/dotfiles
+3) Decirle a git que este archivo debe entrar al próximo commit:
+       git add sysinfo.sh
+4) Guardar el punto en la historia con mensaje descriptivo:
+       git commit -m "sysinfo.sh: argumentos posicionales, colores, deteccion de red"
+
+RECORDATORIO CONCEPTUAL: el mismo patrón symlink usado con .bashrc
+(el archivo real vive en ~/dotfiles, y ~/scripts o $HOME solo tienen un
+enlace apuntando ahí) podría aplicarse también a sysinfo.sh para no tener
+que copiar manualmente cada vez que se edita. Pendiente de decidir/aplicar.
+
+--------------------------------------------------
+8. INSTALACIÓN DE VSCODIUM (AUR, proceso manual)
+--------------------------------------------------
+Motivo: seguir un curso de Bash en video que usa VS Code como editor.
+VS Code no está en los repos oficiales de Arch (licencia de Microsoft),
+así que se instaló su alternativa open source: VSCodium.
+
+ERROR INICIAL: se clonó "vscodium-bin-git" (con "-git" de más), que resultó
+ser un paquete AUR distinto (o vacío/no encontrado del todo). Se limpió con:
+    rm -rf vscodium-bin-git
+
+Para confirmar el nombre exacto del paquete, se usó la API del AUR:
+    curl -s "https://aur.archlinux.org/rpc/v5/search/vscodium" | grep -o '"Name":"[^"]*"'
+
+Esto mostró varias variantes existentes: vscodium, vscodium-bin,
+vscodium-git, vscodium-insiders, vscodium-*-marketplace, etc.
+- "-bin"  → binario ya compilado (rápido de instalar)
+- "-git"  → compila desde el código fuente más reciente (lento)
+- "-marketplace" → variante parcheada para usar el marketplace oficial de
+  extensiones de Microsoft en vez de Open VSX (técnicamente contra los
+  términos de uso de Microsoft, se optó por NO usar esta variante)
+
+Instalación correcta:
+    git clone https://aur.archlinux.org/vscodium-bin.git
+    cd vscodium-bin
+    cat PKGBUILD        → revisión de seguridad antes de compilar (repasar
+                            que la URL de descarga sea la oficial del
+                            proyecto, sin nada sospechoso)
+    makepkg -si          → compila e instala (-s dependencias, -i instala
+                            el paquete final)
+
+====================================================
+CONCEPTOS CLAVE PARA RECORDAR
+====================================================
+- $1, $2... son variables automáticas de bash que ya vienen pobladas al
+  ejecutar el script con argumentos; no se declaran a mano.
+- case "$variable" in patrón) comandos ;; esac es más limpio que múltiples
+  if/elif para menús de opciones basados en texto.
+- Comparación numérica en bash usa -gt, -lt, -eq (no >, < que comparan texto
+  en algunos contextos).
+- while read -r var1 var2... recorre una salida línea por línea, repartiendo
+  cada línea en las variables indicadas según los espacios.
+- Código duplicado en un script es señal de que hace falta una función.
+- El AUR requiere revisar el PKGBUILD antes de compilar (medida de
+  seguridad real, no solo teórica, por los ataques de paquetes maliciosos
+  reportados en el AUR).
+- Nombres de paquetes AUR parecidos (paquete vs paquete-bin vs paquete-git)
+  son proyectos independientes, hay que verificar el nombre exacto antes
+  de clonar (con la API de búsqueda del AUR si hay duda).
+
+====================================================
+PENDIENTES PARA LA PRÓXIMA SESIÓN
+====================================================
+1. Hacer git add + commit de sysinfo.sh actualizado dentro de ~/dotfiles
+2. Refactorizar sysinfo.sh usando funciones reales (eliminar duplicación)
+3. Definir o eliminar la variable $HISTORIAL en la sección de redes conocidas
+4. Corregir los "echo""" sin espacio por "echo """
+5. (Opcional) aplicar symlink a sysinfo.sh igual que se hizo con .bashrc

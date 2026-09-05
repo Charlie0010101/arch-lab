@@ -1,0 +1,207 @@
+====================================================
+DÍA 1 - INSTALACIÓN DE ARCH LINUX (Módulos 01 y 02)
+====================================================
+
+CONTEXTO
+--------
+Hardware: ASUS ROG Zephyrus, Intel Core Ultra 9 + RTX 4070
+Disco destino: Kingston XS2000 (sda) - NUNCA tocar nvme0n1 (Windows/Bazzite)
+USB instalador: preparado con Ventoy (permite tener varias ISOs en un mismo USB
+sin tener que "quemarlo" cada vez, solo arrastras el archivo .iso)
+
+--------------------------------------------------
+1. PREPARAR EL MEDIO DE INSTALACIÓN
+--------------------------------------------------
+- Ventoy2Disk.sh -i /dev/sdb   → instala Ventoy en el USB (BORRA el USB)
+- Copiar el .iso de Arch directo a la partición grande del USB (arrastrar y soltar)
+- Verificar con lsblk que el USB tiene sus particiones (una grande exFAT, una
+  chica ~32MB de EFI)
+
+--------------------------------------------------
+2. ARRANCAR EL INSTALADOR
+--------------------------------------------------
+- Entrar al menú de boot de la laptop (tecla específica del fabricante)
+- Elegir el USB (Ventoy) en vez del disco interno
+- Menú de Ventoy → "Boot Normal"
+- Menú de GRUB del instalador → "Arch Linux install medium (x86_64, UEFI)"
+- Login automático como root
+
+--------------------------------------------------
+3. CONFIGURAR TECLADO Y RED
+--------------------------------------------------
+- loadkeys es              → teclado en español (opcional, us también sirve)
+- iwctl                    → entra a la herramienta de wifi
+    device list             → ver nombre de la interfaz (ej. wlan0)
+    station wlan0 scan
+    station wlan0 get-networks
+    station wlan0 connect "NOMBRE_RED"
+    exit
+- ping -c 3 archlinux.org  → confirmar que hay internet
+
+LECCIÓN APRENDIDA: si el wifi de casa da "authentication-timeout" o señal muy
+débil (-70 dBm o peor), probar con hotspot del celular como alternativa rápida.
+
+--------------------------------------------------
+4. PARTICIONAR EL DISCO (sda = Kingston)
+--------------------------------------------------
+SIEMPRE correr lsblk antes de tocar nada, para confirmar cuál es el disco correcto.
+
+parted /dev/sda -- mklabel gpt                      → tabla de particiones GPT (UEFI)
+parted /dev/sda -- mkpart ESP fat32 1MiB 1GiB        → partición EFI
+parted /dev/sda -- set 1 esp on
+parted /dev/sda -- mkpart primary linux-swap 1GiB 17GiB   → swap (16GB)
+parted /dev/sda -- mkpart primary btrfs 17GiB 100%   → raíz btrfs (resto del disco)
+
+Resultado: sda1 (EFI ~1GB) | sda2 (swap 16GB) | sda3 (btrfs, resto)
+
+--------------------------------------------------
+5. FORMATEAR
+--------------------------------------------------
+mkfs.fat -F32 /dev/sda1
+mkswap /dev/sda2 && swapon /dev/sda2
+mkfs.btrfs /dev/sda3
+
+NOTA: mensajes en rojo tipo "critical target error... DISCARD" al formatear
+btrfs son normales en SSDs externos por USB (el adaptador no soporta bien
+TRIM). No afecta la instalación, se puede ignorar.
+
+--------------------------------------------------
+6. SUBVOLÚMENES BTRFS
+--------------------------------------------------
+Concepto: en vez de particiones fijas, btrfs permite "subvolúmenes" - carpetas
+lógicas independientes dentro del mismo espacio, útiles para snapshots
+selectivos (puedes hacer snapshot de todo el sistema sin incluir /home, etc.)
+
+mount /dev/sda3 /mnt
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@home
+btrfs subvolume create /mnt/@snapshots
+btrfs subvolume create /mnt/@var_log
+umount /mnt
+
+--------------------------------------------------
+7. MONTAR TODO EN SU LUGAR FINAL
+--------------------------------------------------
+mount -o noatime,compress=zstd,subvol=@ /dev/sda3 /mnt
+mkdir -p /mnt/home /mnt/.snapshots /mnt/var/log /mnt/boot
+mount -o noatime,compress=zstd,subvol=@home /dev/sda3 /mnt/home
+mount -o noatime,compress=zstd,subvol=@snapshots /dev/sda3 /mnt/.snapshots
+mount -o noatime,compress=zstd,subvol=@var_log /dev/sda3 /mnt/var/log
+mount /dev/sda1 /mnt/boot
+
+Verificar siempre con: lsblk /dev/sda  o  findmnt | grep sda
+
+--------------------------------------------------
+8. INSTALAR EL SISTEMA BASE
+--------------------------------------------------
+pacstrap -K /mnt base linux linux-firmware btrfs-progs nano vim networkmanager
+
+--------------------------------------------------
+9. FSTAB
+--------------------------------------------------
+genfstab -U /mnt >> /mnt/etc/fstab
+cat /mnt/etc/fstab     → SIEMPRE revisar que cada línea apunte a la partición
+                          correcta (ej. /boot debe ser vfat, no btrfs)
+
+--------------------------------------------------
+10. CHROOT (entrar al sistema recién instalado)
+--------------------------------------------------
+arch-chroot /mnt
+
+Dentro del chroot se configura:
+- Zona horaria:
+    ln -sf /usr/share/zoneinfo/America/Mexico_City /etc/localtime
+    hwclock --systohc
+- Locale:
+    nano /etc/locale.gen   → descomentar es_MX.UTF-8 y en_US.UTF-8
+    locale-gen
+    echo "LANG=es_MX.UTF-8" > /etc/locale.conf
+- Hostname:
+    echo "IUseArchBTW" > /etc/hostname
+- Contraseña root:
+    passwd
+- Usuario nuevo (nunca usar root en el día a día):
+    useradd -m -G wheel -s /bin/bash iusearchbtw
+    passwd iusearchbtw
+- Sudo:
+    pacman -S sudo   (¡ojo! no viene en el pacstrap inicial, hay que instalarlo)
+    EDITOR=nano visudo   → descomentar la línea "%wheel ALL=(ALL:ALL) ALL"
+- Red:
+    systemctl enable NetworkManager
+
+--------------------------------------------------
+11. BOOTLOADER (systemd-boot)
+--------------------------------------------------
+bootctl install
+
+/boot/loader/loader.conf:
+    default arch.conf
+    timeout 3
+    console-mode max
+
+/boot/loader/entries/arch.conf:
+    title   Arch Linux
+    linux   /vmlinuz-linux
+    initrd  /initramfs-linux.img
+    options root=UUID=xxxxx rootflags=subvol=@ rw
+
+Para obtener el UUID: blkid /dev/sda3
+
+--------------------------------------------------
+12. SALIR Y REINICIAR
+--------------------------------------------------
+exit
+umount -R /mnt
+reboot  (quitar el USB antes de que vuelva a arrancar)
+
+====================================================
+ERRORES REALES QUE PASARON Y CÓMO SE RESOLVIERON
+====================================================
+
+1) WiFi con authentication-timeout → señal débil, se usó hotspot del celular.
+
+2) /mnt/boot montado sobre sda3 en vez de sda1 por error → detectado revisando
+   el fstab generado (decía btrfs en vez de vfat en la línea de /boot).
+   Solución: umount /mnt/boot (por RUTA, no por disco) y volver a montar
+   /dev/sda1 correctamente.
+
+3) visudo / sudo "command not found" → el paquete sudo no estaba en el
+   pacstrap inicial. Se instaló aparte con: pacman -S sudo
+
+4) Usuario con shell mal escrita (/bin/bash/ con slash de más, por error de
+   tipeo en el comando useradd) → corregido con:
+   usermod -s /bin/bash iusearchbtw
+
+5) Sistema no arrancaba, regresaba siempre al menú de selección de disco del
+   firmware → bootctl install ejecutado DESDE CHROOT nunca registra la
+   entrada en el firmware (mensaje: "skipping EFI variable modifications").
+   Solución: crear la entrada a mano:
+   efibootmgr --create --disk /dev/sda --part 1 \
+     --loader '\EFI\systemd\systemd-bootx64.efi' --label "Linux Boot Manager"
+
+6) El menú de arranque aparecía pero SIN opción "Arch Linux" → el kernel
+   (vmlinuz-linux) y el initramfs nunca se copiaron a la partición boot real
+   (se quedaron "perdidos" por la confusión del punto 2).
+   Solución: con /boot bien montado sobre sda1, reinstalar:
+   pacman -S linux linux-firmware  → esto regenera y coloca los archivos
+   correctamente.
+
+7) "Failed to mount /sysroot", entra en emergency mode → typo de novato:
+   en arch.conf decía "root=UUDI=..." en vez de "root=UUID=...". Pasó
+   desapercibido varias veces por el parecido visual de las letras.
+   LECCIÓN: siempre revisar los archivos de configuración letra por letra
+   cuando algo no arranca, aunque ya se haya revisado antes.
+
+====================================================
+CONCEPTOS CLAVE PARA RECORDAR
+====================================================
+- UEFI necesita una partición EFI (FAT32) donde vive el bootloader.
+- systemd-boot es más simple que GRUB, pero requiere que su entrada esté
+  registrada en el firmware (NVRAM) con efibootmgr, o desde un arranque
+  UEFI real (no siempre pasa solo con "bootctl install" desde chroot).
+- btrfs con subvolúmenes permite organizar el sistema en piezas lógicas
+  independientes, útil para snapshots selectivos más adelante.
+- El chroot permite "entrar" a un sistema instalado en otro disco para
+  repararlo o configurarlo, sin necesidad de arrancarlo directamente.
+- Siempre verificar con lsblk cuál es el disco correcto ANTES de cualquier
+  comando destructivo (parted, mkfs, etc.)
