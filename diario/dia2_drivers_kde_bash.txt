@@ -1,0 +1,231 @@
+====================================================
+DÍA 2 - DRIVERS, ESCRITORIO Y BASH (Módulos 03 y 04)
+====================================================
+
+--------------------------------------------------
+0. RECONECTAR WIFI DESDE EL SISTEMA YA INSTALADO
+--------------------------------------------------
+Ya no se usa iwctl (eso es solo del instalador live). Ahora que hay
+NetworkManager instalado y habilitado, se usa nmcli:
+
+nmcli device wifi list                    → ver redes disponibles
+nmcli device wifi connect "SSID" password "CLAVE"
+nmcli device status                       → confirmar que diga "conectado"
+ping -c 3 archlinux.org                   → probar salida a internet
+
+LECCIÓN: si ping da "Fallo temporal en la resolución del nombre", casi
+siempre es que el wifi no está realmente conectado (revisar nmcli device
+status) o falta el paquete iputils (da "command not found" en vez de ese
+error, así que primero confirmar cuál de los dos pasa).
+
+--------------------------------------------------
+1. ACTUALIZAR SISTEMA Y HERRAMIENTAS BÁSICAS
+--------------------------------------------------
+sudo pacman -Syu
+sudo pacman -S iputils git base-devel man-db man-pages
+
+- iputils      → da el comando ping
+- git          → control de versiones (para dotfiles y AUR más adelante)
+- base-devel   → herramientas de compilación, necesarias para el AUR
+- man-db/pages → páginas de manual completas (man comando)
+
+--------------------------------------------------
+2. MÓDULO 03 - DRIVERS GRÁFICOS (INTEL + NVIDIA HÍBRIDO)
+--------------------------------------------------
+Hardware: Intel Meteor Lake-P (Arc Graphics integrada) + RTX 4070 Max-Q
+
+Antes de instalar, habilitar multilib (necesario para lib32-nvidia-utils):
+sudo nano /etc/pacman.conf
+  → descomentar:
+    [multilib]
+    Include = /etc/pacman.d/mirrorlist
+sudo pacman -Syu
+
+Instalar drivers:
+sudo pacman -S mesa vulkan-intel intel-media-driver nvidia-open nvidia-utils \
+  nvidia-settings lib32-nvidia-utils
+
+- nvidia-open se eligió por ser mejor soportado en GPUs Ada Lovelace (RTX 40)
+  que el driver propietario cerrado tradicional.
+
+CONFIGURAR EARLY KMS (carga temprana del driver, evita parpadeos y ayuda a
+que Wayland funcione bien con NVIDIA):
+
+sudo nano /etc/mkinitcpio.conf
+  → MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
+sudo mkinitcpio -P
+
+sudo nano /boot/loader/entries/arch.conf
+  → agregar al FINAL de la línea "options" (sin tocar el resto):
+    nvidia_drm.modeset=1
+
+Verificar hardware detectado:
+lspci -k | grep -A 3 -E "(VGA|3D)"
+
+--------------------------------------------------
+3. INSTALAR KDE PLASMA
+--------------------------------------------------
+sudo pacman -S plasma-desktop sddm plasma-nm plasma-pa dolphin konsole kate \
+  ark plasma-workspace
+
+- sddm         → gestor de login gráfico
+- plasma-nm    → applet de red en el panel (GUI para wifi)
+- plasma-pa    → control de volumen en el panel
+- dolphin      → explorador de archivos
+- konsole/kate → terminal y editor gráficos de KDE
+
+Durante la instalación preguntó por proveedores alternativos:
+- JACK → se eligió pipewire-jack (estándar moderno, mejor integrado)
+- Multimedia backend Qt6 → se eligió GStreamer
+
+Habilitar el gestor de login para que arranque automático:
+sudo systemctl enable sddm
+systemctl is-enabled sddm    → debe responder "enabled"
+sudo reboot
+
+RESULTADO: pantalla de login SDDM con sesión "Plasma (Wayland)" disponible.
+Se decidió Wayland (no X11) porque la comunidad reporta mejor estabilidad
+con setups NVIDIA+Intel híbridos en Wayland que en X11.
+
+--------------------------------------------------
+4. VERIFICAR GPU DUAL (PRIME OFFLOADING)
+--------------------------------------------------
+Confirmar que el escritorio usa la Intel por defecto (más eficiente):
+sudo pacman -S mesa-utils
+glxinfo | grep "OpenGL renderer"
+  → esperado: "Mesa Intel(R) Arc(tm) Graphics (MTL)"
+
+Probar que se puede forzar el uso de la RTX 4070 cuando se necesite:
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia glxinfo | grep "OpenGL renderer"
+  → esperado: "NVIDIA GeForce RTX 4070 Laptop GPU/PCIe/SSE2"
+
+Para no escribir esas variables larguísimas cada vez, se creó un script
+llamado "prime-run" (guardado en /bin, ya que /usr/local/bin no existía
+todavía en el sistema recién instalado):
+
+#!/bin/sh
+export __NV_PRIME_RENDER_OFFLOAD=1
+export __NV_PRIME_RENDER_OFFLOAD_PROVIDER=NVIDIA-G0
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export __VK_LAYER_NV_optimus=NVIDIA_only
+exec "$@"
+
+chmod +x /bin/prime-run
+
+Uso diario: anteponer "prime-run" a cualquier programa pesado, ej:
+prime-run steam
+
+--------------------------------------------------
+5. MÓDULO 04 - BASH Y DOTFILES
+--------------------------------------------------
+
+PERSONALIZACIÓN DE ~/.bashrc:
+- Aliases (ll, la, .., ..., update, c, etc.)
+- Prompt con colores usando secuencias de escape ANSI:
+    PS1='\[\033[1;32m\]\u@\h\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]\$ '
+  NOTA: usar \033 en vez de \e cuando se escribe el archivo a mano, porque
+  \e a veces no se interpreta bien y se ve como texto literal "e[1;32m".
+- HISTSIZE / HISTFILESIZE / HISTCONTROL para mejorar el historial de comandos
+
+DOTFILES CON GIT (para versionar la configuración):
+mkdir ~/dotfiles
+cd ~/dotfiles
+git init
+git config --global user.email "correo@ejemplo.com"
+git config --global user.name "IUseArchBTW"
+git add .bashrc
+git commit -m "mensaje descriptivo"
+
+SYMLINK (para que el repo sea la fuente real, no una copia suelta):
+Concepto: en vez de tener el .bashrc real en $HOME y una copia en el repo
+(que hay que sincronizar a mano cada vez), se hace que $HOME/.bashrc sea
+un ENLACE SIMBÓLICO que apunta directo al archivo dentro de ~/dotfiles.
+Así cualquier cambio en el repo se refleja automático en la shell real.
+  (comando clave: ln -s   → investigar sintaxis exacta: ln -s ORIGEN DESTINO)
+
+Verificar que es symlink: ls -la ~/.bashrc
+  → debe mostrar algo como:  .bashrc -> /home/usuario/dotfiles/.bashrc
+
+--------------------------------------------------
+6. SCRIPTING BÁSICO: sysinfo.sh
+--------------------------------------------------
+Ubicación: ~/scripts/sysinfo.sh (para que funcione como comando "sysinfo"
+desde cualquier carpeta, se agregó ~/scripts al PATH en el .bashrc):
+
+    export PATH="$HOME/scripts:$PATH"
+
+Esto es lo que hace que basta escribir "sysinfo" en vez de la ruta completa
+o "./sysinfo.sh" - el PATH es la lista de carpetas donde bash busca
+comandos ejecutables automáticamente.
+
+CONCEPTOS DE BASH APRENDIDOS EN EL SCRIPT:
+- Shebang: #!/bin/bash (primera línea, le dice al sistema qué intérprete usar)
+- chmod +x archivo.sh → da permiso de ejecución (obligatorio o da "Permission denied")
+- Sustitución de comandos: $(comando) → mete el resultado de un comando dentro
+  de una variable o de un echo
+- ARGUMENTOS POSICIONALES: bash separa automáticamente lo que se escribe
+  después del nombre del script en variables $1, $2, etc.
+    ./sysinfo.sh net   → dentro del script, $1 vale "net"
+    ./sysinfo.sh       → $1 queda vacío
+  (esto NO se declara a mano, ya viene poblado por bash antes de correr el script)
+- case "$1" in ... esac → estructura tipo "menú" más limpia que varios if
+  seguidos, para decidir qué hacer según el valor de una variable
+- Comparación numérica: [ "$numero" -gt 80 ] → mayor que 80 (usar -gt, -lt,
+  -eq, no simplemente > o < que en bash comparan texto, no números)
+- Loop while read: forma de procesar una salida línea por línea, ej:
+    ip -o -4 addr show | while read -r num interfaz familia direccion resto; do
+      ...
+    done
+  cada línea de la salida se reparte en variables (num, interfaz, etc.)
+- Colores ANSI en variables para reusar en varios echo:
+    VERDE="\e[32m"; RESET="\e[0m"
+    echo -e "${VERDE}texto en verde${RESET}"
+  (el -e en echo es necesario para que interprete los \e como código de color)
+
+ERROR DE DISEÑO A EVITAR (detectado y pendiente de corregir): código
+duplicado entre la opción "todo" y las opciones individuales del case.
+La solución correcta es convertir cada sección en una FUNCIÓN
+(nombre_funcion() { ... }) y que el case simplemente LLAME a esas funciones
+en vez de repetir el código completo.
+
+--------------------------------------------------
+7. INSTALAR SOFTWARE DEL AUR (proceso manual, sin helper todavía)
+--------------------------------------------------
+El AUR (Arch User Repository) no es accesible con pacman normal. Contiene
+solo "recetas" (PKGBUILD) para compilar el programa, no binarios listos
+(salvo los paquetes que terminan en "-bin", que sí traen binario precompilado).
+
+Proceso manual (sin yay/paru):
+git clone https://aur.archlinux.org/NOMBRE-DEL-PAQUETE.git
+cd NOMBRE-DEL-PAQUETE
+cat PKGBUILD        → SIEMPRE revisar antes de compilar (por seguridad,
+                        el AUR ha sido blanco de ataques de paquetes
+                        maliciosos en el pasado)
+makepkg -si          → compila (-s instala dependencias) e instala (-i) el
+                        resultado
+
+LECCIÓN: verificar el nombre EXACTO del paquete antes de clonar. Nombres
+parecidos como "paquete-bin" vs "paquete-git" vs "paquete" son proyectos
+AUR completamente distintos (bin = precompilado, git = compila desde la
+última versión del código fuente, más lento).
+
+Se usó para instalar VSCodium (alternativa open source a VS Code):
+git clone https://aur.archlinux.org/vscodium-bin.git
+
+====================================================
+CONCEPTOS CLAVE PARA RECORDAR
+====================================================
+- Modo híbrido de GPU: la iGPU maneja el día a día (batería/eficiencia),
+  la dGPU se activa solo bajo demanda con prime-run.
+- Wayland es el protocolo gráfico moderno; con setups NVIDIA+Intel suele
+  ser más estable que X11 (protocolo más antiguo).
+- systemd-boot lee su configuración de /boot/loader/ - cualquier cambio ahí
+  (como agregar nvidia_drm.modeset=1) requiere revisar bien la sintaxis
+  antes de reiniciar.
+- PATH es la variable que le dice a bash dónde buscar comandos ejecutables.
+- Symlinks son la base de cómo se gestionan los dotfiles en la comunidad
+  Linux: un solo archivo real (en el repo git), muchos "accesos directos"
+  apuntando a él desde donde el sistema los espera.
+- $1, $2... son variables automáticas de bash, no hay que declararlas.
+- AUR requiere revisión manual de seguridad (PKGBUILD) antes de compilar,
+  especialmente después de los ataques reportados a paquetes huérfanos.

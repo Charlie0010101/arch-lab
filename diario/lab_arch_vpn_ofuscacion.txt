@@ -1,0 +1,47 @@
+LAB ARCH - Laboratorio: VPN + Ofuscacion en VPS
+Plataforma: Oracle Cloud - Ampere A1 (ARM, 2 nucleos, 12GB RAM, 70GB disco)
+Curso: Ciberseguridad
+================================================================
+
+FASE 0 - Preparacion del entorno
+--------------------------------
+- Verificar SO instalado (Ubuntu 22.04/24.04 ARM u Oracle Linux)
+- Actualizar sistema y configurar firewall base (ufw o iptables)
+- Configurar reglas de seguridad en Oracle Cloud (Security Lists /
+  Network Security Groups) para abrir los puertos necesarios
+- Hardening basico: cambiar puerto SSH, deshabilitar login root,
+  usar llaves SSH en vez de contrasena
+
+FASE 1 - Servidor WireGuard
+---------------------------
+- Instalar WireGuard (verificar compatibilidad aarch64)
+- Generar pares de llaves (servidor y cliente)
+- Configurar interfaz wg0, NAT/masquerade, IP forwarding
+- Conectar un cliente (laptop/celular) y verificar el tunel
+- Prueba de fuga de DNS/IP (antes vs. despues de conectar)
+
+FASE 2 - Capa de ofuscacion con Shadowsocks
+--------------------------------------------
+- Instalar Shadowsocks-libev (o v2ray/xray como alternativa)
+- Configurar en un puerto distinto, cifrado AEAD
+- Verificar que el trafico se vea como HTTPS normal ante un
+  analisis basico (Wireshark/tcpdump)
+- Comparar captura de paquetes: WireGuard solo vs. WireGuard +
+  ofuscacion
+
+FASE 3 - Validacion y pruebas
+------------------------------
+- Pruebas de fuga: dnsleaktest.com, ipleak.net con la VPN activa
+- Captura de trafico con Wireshark en el cliente para documentar
+  el cifrado
+- Prueba de rendimiento (latencia/velocidad con y sin tunel)
+- (Opcional, enfoque blue team) Intentar detectar el propio
+  trafico Tor/VPN desde otro punto usando listas publicas de nodos
+
+FASE 4 - Documentacion y reporte final
+----------------------------------------
+- Estructura: introduccion teorica, marco conceptual (capas OSI
+  afectadas, tipos de cifrado), metodologia, implementacion paso a
+  paso con capturas, resultados de pruebas, limitaciones y
+  conclusiones
+- Entregable final: documento PDF estilo reporte de laboratorio
